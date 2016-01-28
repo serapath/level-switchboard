@@ -1,0 +1,18 @@
+{
+  "name": "level-switchboard",
+  "version": "0.0.1-alpha",
+  "description": "",
+  "main": "source/switchboard.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "serapath <dev@serapath.de> (http://www.github.com/serapath)",
+  "license": "MIT",
+  "dependencies": {
+    "component-type": "^1.2.0",
+    "deep-equal": "^1.0.1",
+    "duplexify": "^3.4.2",
+    "json-stable-stringify": "^1.0.0",
+    "readable-stream": "^2.0.5"
+  }
+}
