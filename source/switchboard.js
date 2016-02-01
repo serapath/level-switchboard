@@ -26,13 +26,13 @@ module.exports = switchboard
     [[], 'array']
   ]
   API:
-  // duplexable({gte: 'articles/', lt: 'articles/~'}, {
+  // duplexable({gte: 'articles/', lt: 'articles/~\xff'}, {
   //   'articles/01': {},
   //   'articles/02': {},
   //   'articles/03': {},
   //   'articles/04': {}
   // })
-  // duplexable({gte: 'title/', lt: 'title/!'}, { 'title': 'My little shop' })
+  // duplexable({gte: 'title/', lt: 'title/!\x00'}, { 'title': 'My little shop' })
 
   if db.prefix() exists, arg: codec will be used to encode the prefix
   for every key used in db.put/del/get/batch() operations
@@ -43,7 +43,7 @@ module.exports = switchboard
     // => { type: 'inbound', key: '!footer#box!/foobar' }
     // => { type: 'outbound', key: '!footer#box!/foobar' }
     return { toDB: 'data/foobar' }
-  }, { allowRewire: true })
+  }, { allowRewire: true }) // @TODO: a force db overwrite option for defaults
 ******************************************************************************/
 function switchboard (DB, translate, codec) {
   validateArgs(DB, translate, codec)
@@ -90,17 +90,17 @@ function switchboard (DB, translate, codec) {
     return _put(key, value, opts, function callback (error) {
       console.log('[PUT] <key> ', key, '<value> ', value)
       cb(error)
-      // else publish({ type: 'put', key: key, value: value })
+      // @TODO: else publish({ type: 'put', key: key, value: value })
     })
   }
   function delPatch (key, opts, cb) {
     // @TODO: translate "key" to "WIREUP" translated key
-    // => to WRITE delete the value at the correct path
+    // => to DELETE the value at the correct path
     var prefix = (key.match(prefixer)||[])[0]
     return _del(key, opts, function callback (error) {
       console.log('[DEL] <key> ', key)
       cb(error)
-      // else publish({ type: 'del', key: key })
+      // @TODO: else publish({ type: 'del', key: key })
     })
   }
   function batchPatch (ops, opts, cb) {
@@ -278,16 +278,9 @@ function switchboard (DB, translate, codec) {
 
   var DATAROUTER = {
     routing: undefined
-    readables: {},
-    outbound: {},
-    inbound: {},
-    defaults: {}
-    // @TODO: needed?
-    // var _READABLES = {}
-    // @TODO: needed?
-    // var _OUTBOUND = {}
-    // var _INBOUND = {}
-    // var _DEFAULTS = {}
+    readables: {},// @TODO: needed?
+    outbound: {},// @TODO: needed?
+    inbound: {}// @TODO: needed?
   }
 
   DB.duplexable = makeDuplexable
@@ -335,6 +328,7 @@ function switchboard (DB, translate, codec) {
       // @TODO: for write$ and read$, do WIREUP(route) events!
 
       // @TODO: maybe patch read$.push with a check(chunk)
+      // @TODO: make sure read$ doesnt get key/values outside of scope of config
       if (DATAROUTER.routing && first) {
         first = false
         bufferRead.forEach(function (c) {
@@ -463,17 +457,13 @@ function switchboard (DB, translate, codec) {
 // @XXX
 // 1. WIREUP(DATAROUTER, route, defaults)
 // ....
-  // from: EXAMPLE from db.on('route') sync? returns
   //
-  // @XXX
+  // @XXX from: EXAMPLE from db.on('route') sync? returns
   // 1a. DATAROUTER.routing(route) // => { fromDB/MEM: 'data/asdf/foobar/ '}
   // !IMPORTANT: if route didnt have defaultInitVal, a set wiring.setInitVal
   // will throw an Error. if wanted: set with db.put(...) instead
-  //
-  // @TODO: if wiring causes multiple default values for certain sink/sources
-  // => then throw an error telling user to fix it by not set certain defaults
-  // HINT: even component internal, e.g. .duplexable({'a':'x'}), .duplexable({'a':'y'}) doesnt work!
-  //
+  // @TODO: think about passing "routes" instead of "route, defaults"
+  // @TODO: should all "defaultRoutes in routes" have inbound/outbound? why?
   //
   // !IMPORTANT: if route doesnt specify a key-mapping, then it automatically
   // will map to itself. from/toMEM:petkey2petkey
@@ -486,11 +476,21 @@ function switchboard (DB, translate, codec) {
   // => outbound->realkey1 + inbound->realkey2, then
   // => connection gets BROKEN on purpose
   // Setting a mapping explicitly will break that connection
-  // THINK: wiring related conflicting default values should THROW
+  //
+  // THINK: wiring related conflicting default values must THROW
+  // => user resolves by explicit default wiring
   //
   // wiring = e.g.
   // { fromDB: 'data/foobar/', setInitVal: undefined } // e.g. explicit wiring
   // { fromMEM: petKey, setInitVal: defaultInitVal } // defaultWiring
+  //
+  // @TODO: if wiring causes multiple default values for certain sink/sources
+  // => then throw an error telling user to fix it by explicitly not set certain defaults. HINT: even component internal, e.g. .duplexable({'a':'x'}), .duplexable({'a':'y'}) must not work!
+  //
+  // @TODO: if DB already has a value stored, do not set a default value
+    // if (type(val) !== 'undefined') db.get(key, populate)
+    // function populate (doesntExist) { if (doesntExist) { db.put(key, val) } }
+  // @IDEA: offer a FORCE option to overwrite db with defaults for setting the router
   //
   // { [toDB: '/data/term'[, setInitVal: e.g. route.defaultInitVal]] }
   // { [toMEM: '/data/term'[, setInitVal: e.g. route.defaultInitVal]] }
@@ -532,10 +532,24 @@ function switchboard (DB, translate, codec) {
             // 4. db.put(realKey, TRACKER[value])
 // 3. forAll _batch._batch/_put/_del/_... operations, function cb (error) {
   // NOTIFY OPERATION outbound: fromDB/MEM -> realKey2petKey
+
+            // => publish to all interested read$'s
+
+                  //   for (var i = 0, l = trackingRange.length; i < l; i++) {
+                  //     var r = trackingRange[i]
+                  // @TODO: binary search for start and end keys
+                  //     if (change.key >= r.start && change.key <= r.end) {
+                  //       if (r.stream._objectMode) r.stream.queue(change)
+                  //       else r.stream.queue(JSON.stringify(change) + '\n')
+                  //     }
+                  //   }
+
             // var _OUTBOUND = { // db.readable()
             //   '/bla/': ['/a/', '/b/'],
             //   '/bla/5': ['/p']
             // } // @TODO cache from/for DATAROUTER?
+
+            // => do: read$.push(petKet, dataValue)
             var _OUTBOUND = {
               'stuff/quux/': [
                 // notify about TRACKINGs
@@ -592,14 +606,18 @@ function WIREUP (DATAROUTER, route, defaults) {
 
   debugger;
 
+  // @TODO: store "routes" until a DATAROUTER.routing has been set, then
+  // start doing work, by also flushing buffered routes
+
+  // @NOTE: ACTIVE means the moment a "routing" is attached
+  //  1. first set all the buffered routes
+  //  2. second is to flush all buffered read/writes
+
   if (DATAROUTER.routing) {
     // @TODO: think about whether subtracker and all the writable, readable and duplexable calls are forced to be SYNC and thus - a setTimout(...,0) can be trusted to executed guaranteed AFTER all stuff has been registered. Maybe collect changes for applying them in a setTimeout with custom interval
     var wiring = DATAROUTER.routing(route)
-    // @TODO: validate, that "DATAROUTER" defines a "wiring" for every route
-    // OR: allow some routes to be undefined/ignored and see if its practical
-
-    // @TODO: ??? doWiring(INBOUND, OUTBOUND, DEFAULTS, activate) ???
-
+    // @IDEA: maybe "routing" itself can be a STREAM
+    // function wiring2 (chunk, encoding, next) { this.push() }
   } else {
     console.log('No DATAROUTER set yet')
   }
@@ -619,66 +637,6 @@ function WIREUP (DATAROUTER, route, defaults) {
     "!test1#doobidoo1!/quux/": [ "!test1#doobidoo1!/quux/" ],
     "!test1#doobidoo2!/baz/": [ "!test1#doobidoo2!/baz/" ]
   }
-
-  // @TODO: SUBSCRIBE read$ means
-  // 1. config.defaults have to be eventually written to the db if WIREUP() says so || in order to determine where: needs mapping!
-  // ==> var targetKey = INBOUND[defaultKey]
-  // 2. WIREUP() also needs to say what "data keys" map to which "view keys"
-  // + on(dataKey) => read$.push(viewKey+dataValue)
-
-
-  // add to subscribers to publish to
-  // PUBLISH - to all interested read$'s
-    //   for (var i = 0, l = trackingRange.length; i < l; i++) {
-    //     var r = trackingRange[i]
-    // @TODO: binary search for start and end keys
-    //     if (change.key >= r.start && change.key <= r.end) {
-    //       if (r.stream._objectMode) r.stream.queue(change)
-    //       else r.stream.queue(JSON.stringify(change) + '\n')
-    //     }
-    //   }
-    var w = JSON.stringify(config.prefix+config.baseKey)
-    var x = JSON.stringify(config.query)
-    var y = JSON.stringify(config.defaults)
-    var z = config.check
-    console.log('<Readable key="'+w+'" query="'+x+'" defaults="'+y+'" check="'+z+'"/>')
-
-  // @TODO: PUBLISH from write$ means
-    // 1. store defaults PREFIXED in DEFAULTS to wait for the WIREUP call
-    // 2. WIREUP: map VIEW PREFIXES + common(gte/lt) part of ranges to namespace
-    // add to inbound
-    var w = JSON.stringify(config.prefix+config.baseKey)
-    var x = JSON.stringify(config.query)
-    var y = JSON.stringify(config.defaults)
-    var z = config.check
-    console.log('<Writable key="'+w+'" query="'+x+'" defaults="'+y+'" check="'+z+'"/>')
-  }
-
-  function wiring2 (inbound, outbound, defaults, activate) {
-
-  } // VS.
-  function wiring2 (chunk, encoding, next) {
-    // var chunk = { type: 'inbound', value: write$ }
-    // var chunk = { type: 'outbound', value: read$ }
-    // var stream$ = read$ || write$
-    // config = {
-    //   query: {
-    //     gte,
-    //     lt
-    //   },
-    //   defaults: { },
-    //   check: fn,
-    //   key:
-    this.push()
-  }
-  //console.log('@TODO(_validate): what if many components are "wired up and give different default values into the db? what should happen?"')
-  // @TODO: make sure read$ doesnt get key/values outside of scope of config
-  // @TODO: populate "defaults" if wanted
-  // if (type(val) !== 'undefined') db.get(key, populate)
-  // function populate (doesntExist) { if (doesntExist) { db.put(key, val) } }
-
-  var defaultsBatch = {}
-  //activate(defaultsBatch) // populate db with default values
 }
 /******************************************************************************
   HELPER - translator & inCommon
@@ -689,6 +647,9 @@ function translator (db, args, translate, codec) {
   // all default keys should be contained in the interval range
   var gte = config.query.gte
   var lt  = config.query.lt
+  // @TODO: re-think  gte,lt , maybe into
+  // { gte: '/foobar/!', lte: '/foobar/~' }
+  // { gte: '/foobar',   lte: '/foobar'   }
   var defaults = config.defaults
   if (!gte || !lt)
     throw ArgumentDoesntFullfillRequirementsError ('query', conofig.query)
