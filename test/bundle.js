@@ -1,1 +1,1 @@
-console.error("SyntaxError: Unexpected token (401:8) while parsing /home/serapath/workspace/serapath.de/OPENSOURCE/MYMODULES/level-switchboard/source/switchboard.js while parsing file: /home/serapath/workspace/serapath.de/OPENSOURCE/MYMODULES/level-switchboard/source/switchboard.js");
+console.error("SyntaxError: Unexpected token (381:19) while parsing /home/serapath/workspace/serapath.de/OPENSOURCE/MYMODULES/level-switchboard/source/switchboard.js while parsing file: /home/serapath/workspace/serapath.de/OPENSOURCE/MYMODULES/level-switchboard/source/switchboard.js");

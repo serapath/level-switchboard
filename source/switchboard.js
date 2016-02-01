@@ -289,32 +289,30 @@ function switchboard (DB, translate, codec) {
   DB.duplexable = makeDuplexable
 
   return DB
-  /////////////////////////////////////////////////////////////////
-  // DATAROUTER: API USAGE
-  /////////////////////////////////////////////////////////////////
-  function dataRouter (route) {
-    // e.g.
-    // route =
-    //   { type: 'inbound', key: '!header#box#searchbar!/term' } // key=source
-    //   { type: 'outbound', key: '!header#minimap!/title' } // key=sink
-    return {
-      inbound: { // [PETKEYtoREALKEY] from actual write$'s || write$ + config
-      // e.g. petKey = '!footer#box!item/02'
-      //               => '!footer#box!/item/':'stuff/quux/'
-      // e.g. realKey = 'stuff/quux/'+'02'
 
+  // function dataRouter (route) {
+  //   return {
+  //     inbound: { // [PETKEYtoREALKEY] from actual write$'s || write$ + config
+  //     // e.g. petKey = '!footer#box!item/02'
+  //     //               => '!footer#box!/item/':'stuff/quux/'
+  //     // e.g. realKey = 'stuff/quux/'+'02'
+////////////////////////////////////////////////////////////////////////////////
 // PROCESS
 
   // @XXX
   // 0a. SETUP - makeReadable
-  // ????
+  // from EVERY read$s petkey it's possible to extract configs "prefix+baseKey"
+
+  // @TODO: a read$ should receive the value from default/db/mem once set initially - because by the time the default or write$val was written, the read$ might not have existed yet - if it doesn't exist, just wire it up, so later write-routes default or writes will update it
 
   // @XXX
-  // 0b. SETUP - makeWritable
+  // 0b. SETUP - makeWritable => creates write$,config,route
+  // from EVERY write$s petKey it's possible to extract configs "prefix+baseKey"
+  //
+  // read$'s key === outbound sink, write$'s key === inbound source
   // route = e.g.
   // { type:'inbound', key:'!header#box#searchbar!/term'[, defaultInitVal:''] }
   // { type:'outbound', key:'!header#box#searchbar!/term'[, defaultInitVal:''] }
-
   // @XXX
   // 1. WIREUP(route)
   // ....
@@ -352,80 +350,50 @@ function switchboard (DB, translate, codec) {
     // { [fromDB: '/data/term'[, setInitVal: e.g. route.defaultInitVal]] }
     // { [fromMEM: '/data/term'[, setInitVal: e.g. route.defaultInitVal]] }
 
+              // var _DEFAULTS = { // js values => internally mapped to JSON
+              //   '/bla/': 'foobar',
+              //   '/bla/5': 'foobar yay',
+              // }
 
-  // -----------------------------------------------------------------------
-  // @TODO: traverse and validate existance of all petKeys write$'s
-  // ALL written petKeys come from write$'s
-  // ALL write$'s have a config including a "prefix" and "baseKey"
-  // from EVERY petKey it's possible to extract "prefix+baseKey"
-  // USER can make mappings from "defaults" and "prefix+baseKey" to realKeys
-
-  // @TODO: even if defaults do not get written
-  // @TODO: => offer them as router translation options
   // -----------------------------------------------------------------------
 
   // FLOW - write$
   // e.g.
   // 0. write$.write(writeChunk)
   // - writeChunk = { type: dbMethod, key: petKey, value: maybeValue }
-  // 1. write$._write():
+  // 1. write$._write(chunk, enc, next):
   // - check(writeChunk) // format & in writing range, else throw/errorHandling
+  // @IDEA: enable constraints on "value format"
   // - buffer until dataRouter available, then db.batch WRITE
       // @TODO: when no write, but dataRouter available, flush!
-  // 2. forAll db._batch/_put/_del/_... operations
-  // - inbound petKey2realKey
-        // key, e.g.:      !A#B#C!/foo/bar/baz/5
-        // TRACKER[key]   = '/page/navbar/menu/notification'
-        // tracker, e.g.:  !A#B#C!/foo/bar/baz/
-        // TRACKER[query] = '/page/navbar/menu/'
-        // var diff       =  TRACKER[key].slice(TRACKER[query].length)
-        // var diff       = 'notification'
-        // 2. var realQuery = INBOUND[TRACKER[query]]
-        // 3. var realKey   = realQuery + diff
-        '/x/': '/bla/',
-        '/b/': '/bla/',
-        '/a/': '/bla/'
-        // 4. db.put(realKey, TRACKER[value])
-  // - DB WRITE OPERATION
-  // - realKey2petKeys outbound
-  // - NOTIFY OPERATION
+  // 2. db.batch(ops, {}, next) batchPach/delPatch/getPatch/putPatch()
+    // @TODO: userSet or default routes exist, if not save to itself
+    // SAVE DB WRITE OPERATION inbound: petKey2realKey-> toDB/MEM
+              // key, e.g.:      !A#B#C!/foo/bar/baz/5
+              // TRACKER[key]   = '/page/navbar/menu/notification'
+              // tracker, e.g.:  !A#B#C!/foo/bar/baz/
+              // TRACKER[query] = '/page/navbar/menu/'
+              // var diff       =  TRACKER[key].slice(TRACKER[query].length)
+              // var diff       = 'notification'
+              // 2. var realQuery = INBOUND[TRACKER[query]]
+              // 3. var realKey   = realQuery + diff
+              '/x/': '/bla/',
+              '/b/': '/bla/',
+              '/a/': '/bla/'
+              // 4. db.put(realKey, TRACKER[value])
+  // 3. forAll _batch._batch/_put/_del/_... operations, function cb (error) {
+    // NOTIFY OPERATION outbound: fromDB/MEM -> realKey2petKey
+              // var _OUTBOUND = { // db.readable()
+              //   '/bla/': ['/a/', '/b/'],
+              //   '/bla/5': ['/p']
+              // } // @TODO cache from DATAROUTER?
+  //  4. read$.push
+      // @TODO: traverse and validate existance of all petKeys read$'s
+      // @IDEA: ALL set realKeys should maybe go to read$'s ???
+      // ALL read$'s have a config including a "prefix" and "baseKey"
+      // -> in order to go to a specific read$, a realKey needs to be mapped
+      //    to at least prefix+baseKey of that read$
 
-
-
-  // @TODO: traverse and validate existance of all petKeys read$'s
-  // ALL realKeys should maybe go to read$'s
-  // ALL read$'s have a config including a "prefix" and "baseKey"
-  // -> in order to go to a specific read$, a realKey needs to be mapped
-  //    to at least prefix+baseKey of that read$
-        '!header#box#searchbar!/term': {
-          toDB: '/data/term'
-        },
-        '!header#minimap!/title': {
-          toMEM: '/data/title' // defaults to inboundKey
-        }
-      },
-      outbound: { // [REALKEYtoPETKEY] to actual read$'s
-        '!header#box#searchbar!/term': {
-          fromDB: '/data/term'
-        },
-        '!header#minimap!/title': {
-          fromMEM: '/data/title' // defaults to outboundKey
-        }
-      }
-    }[route.type][route.key]
-  }
-  /////////////////////////////////////////////////////////////////
-  // var OUTBOUND = { // db.speakerbox() === db.readable()
-  //   '/bla/': ['/a/', '/b/'],
-  //   '/bla/5': ['/p']
-  // }
-  // //   => tracker -> relevant listening ranges
-  // //   => key -> relevant listening ranges
-  // // db.telephone() === db.duplexable()
-  // var DEFAULTS = { // js values => internally mapped to JSON
-  //   '/bla/': 'foobar',
-  //   '/bla/5': 'foobar yay',
-  // }
   /////////////////////////////////////////////////////////////////////////
   var OUTBOUND = {
     'stuff/quux/': [
@@ -580,45 +548,56 @@ function switchboard (DB, translate, codec) {
   function makeReadable (query, defaults) {
     if (this.config) var db = this.db, config = this.config
     else var db = this, config = translator(db, arguments, translate, codec)
+
     var read$ = readable({ objectMode: true })
     read$._read = noop
-    // @TODO: How to handle errors in streams?
+
     // @TODO: cleanup on read$ close (UNSUBSCRIBE)
     read$.on('close', function () { console.log('READ$ close', read$) })
-    read$.on('end', function () { console.log('READ$ end', read$) })
     read$.on('closing', function () { console.log('READ$ closing', read$) })
+    read$.on('end', function () { console.log('READ$ end', read$) })
     read$.on('error', function () { console.log('READ$ error', read$) })
-    var prefix = config.prefix
-    var baseKey = config.baseKey
-    //////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////
-    if (type(READABLES[prefix+baseKey]) !== 'array')
-      READABLES[prefix+baseKey] = []
-    var push = read$.push
+    // @TODO: How to handle errors in streams?
+
     var first = true
     var bufferRead = []
-      LESEZEICHEN
-    // WIREUP(route)
+    var _push = read$.push
     read$.push = function pushPatch (chunk) {
-      LESEZEICHEN
+    //////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////
+      // @TODO: test, if an initial value pushed to read$ will
+      // 100% guaranteed arive, if read$ itself is not wired up yet -
+      // otherwise check for stream events to notify when is the right moment
+
       // @TODO: for write$ and read$, do WIREUP(route) events!
+
       // @TODO: maybe patch read$.push with a check(chunk)
       if (DATAROUTER && first) {
         first = false
         bufferRead.forEach(function (c) {
-          push.call(this, c)
+          _push.call(this, c)
         })
-        push.call(this, chunk)
+        _push.call(this, chunk)
       } else if (DATAROUTER) {
-        push.call(this, chunk)
+        _push.call(this, chunk)
       } else {
         bufferRead.push(chunk)
       }
+    //////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////
     }
-    // @TODO: or WIREUP call?
+
+    var prefix = config.prefix
+    var baseKey = config.baseKey
+    var route = { type: 'inbound', key: prefix+baseKey }
+    WIREUP(route)
+
+    // @TODO: publish initial default or db value to read
+
+    if (type(READABLES[prefix+baseKey]) !== 'array')
+      READABLES[prefix+baseKey] = []
     READABLES[prefix+baseKey].push(read$)
-    //////////////////////////////////////////////////////////////////////////
-    //////////////////////////////////////////////////////////////////////////
+
     return read$
   }
   function makeWritable (query, defaults) {
@@ -643,13 +622,17 @@ function switchboard (DB, translate, codec) {
         db.batch(batch, {}, next)
       } else db.batch(batch, {}, next)
     }
-    write$.on('close', function () { console.log('WRITE$ close', write$) })
-    write$.on('end', function () { console.log('WRITE$ end', write$) })
-    write$.on('closing', function () { console.log('WRITE$ closing', write$) })
-    write$.on('error', function () { console.log('WRITE$ error', write$) })
-    // @TODO: How to handle errors in streams?
-    var route = { type: 'outbound', key: config.prefix+config.baseKey }
+
     // @TODO: cleanup on write$ close UNPUBISH / UNSIBSCRIBE
+    write$.on('close', function () {console.log('WRITE$ close', write$) })
+    write$.on('closing', function () {console.log('WRITE$ closing', write$) })
+    write$.on('end', function () {console.log('WRITE$ end', write$) })
+    write$.on('error', function () {console.log('WRITE$ error', write$) })
+    // @TODO: How to handle errors in streams?
+
+    var prefix = config.prefix
+    var baseKey = config.baseKey
+    var route = { type: 'outbound', key: prefix+baseKey }
     WIREUP(route)
     return write$
   }
