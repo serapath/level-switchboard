@@ -61,25 +61,38 @@ function switchboard (DB, translate, codec) {
 
   // @TODO: DB.off('route') // return currently attached routing
 
-  var x
+  var allow
   var _on = DB.on.bind(DB)
   DB.on = function on (event, callback, opts) {
+    ///////////////////////////////////////////////////////////////////////////
+    // @TODO: add to public API and README.md
+    // function dataRouter (route) {
+    //   return {
+    //     inbound: { // [PETKEYtoREALKEY] from actual inbound$'s || inbound$ + config
+    //     // e.g. petKey = '!footer#box!item/02'
+    //     //               => '!footer#box!/item/':'stuff/quux/'
+    //     // e.g. realKey = 'stuff/quux/'+'02'
+    //
+    //    ... incomplete @TODO: complete this example ...
+    //
+    //////////////////
     if (event === 'route') {
-      if (x === undefined) x = opts && opts.allowRewire || false
-      if (DATAROUTER.routing && x)
-        throw new Error('@TODO re-wiring not supported')
-      else if (DATAROUTER.routing) throw new Error('router was already set')
-      else {
-        // @TODO: validate DATAROUTER for meaningful answers to all known routes
-        DATAROUTER.routing = callback
-        DATAROUTER.bufferedRoutes.forEach(function (route) {
-          // @TODO: process route - see: WIREUP
-          // ACTIVE means the moment a "routing" is attached
-          //  1. first set all the buffered routes
-          //  2. second is to flush all buffered read/writes
+      if (allow === undefined) allow = opts && opts.allowRewire || false
+      else if (DATAROUTER.routing && !allow)
+        throw new Error('router was already set - rewiring is disabled')
+      else if (type(callback) === 'function') {
+        DATAROUTER.routing = callback // ACTIVATE
+        // 1. first set all the buffered routes
+        DATAROUTER.bufferedRoutes.forEach(function (pair) {
+          var routes = pair[0]
+          var stream$ = pair[1]
+          WIREUP(DATAROUTER, routes, stream$)
         })
-        DATAROUTER.bufferedRoutes = null
-      }
+        DATAROUTER.bufferedRoutes = []
+        // 2. second is to flush all buffered operations to outbound$'s
+        DATAROUTER.inboundBuffer.forEach(function (b){db.batch(b,{},noop)})
+        DATAROUTER.inboundBuffer = []
+      } else throw new Error('"routing" must be a function - see README.md')
     }
     else _on(event, callback)
   }
@@ -89,6 +102,7 @@ function switchboard (DB, translate, codec) {
   function getPatch (key, opts, cb) {
     // @TODO: translate "key" to "WIREUP" translated key
     // => to READ the correct value
+    // @TODO: MAYBE use DATAROUTER.routing(...) ???
     var prefix = (key.match(prefixer)||[])[0]
     return _get(key, opts, function callback (error, value) {
       console.log('[GET] <key> ', key, '<value> ', value)
@@ -102,7 +116,8 @@ function switchboard (DB, translate, codec) {
     return _put(key, value, opts, function callback (error) {
       console.log('[PUT] <key> ', key, '<value> ', value)
       cb(error)
-      // @TODO: else publish({ type: 'put', key: key, value: value })
+      // @TODO: else notify({ type: 'put', key: key, value: value })
+      // @TODO: REFACTOR batchPatch content so that it can be used here
     })
   }
   function delPatch (key, opts, cb) {
@@ -112,15 +127,16 @@ function switchboard (DB, translate, codec) {
     return _del(key, opts, function callback (error) {
       console.log('[DEL] <key> ', key)
       cb(error)
-      // @TODO: else publish({ type: 'del', key: key })
+      // @TODO: else notify({ type: 'del', key: key })
+      // @TODO: REFACTOR batchPatch content so that it can be used here
     })
   }
   function batchPatch (ops, opts, cb) {
-    console.log('[BATCH] <key> ', ops)
-    if (ops.length) {
+    if (ops.length) { // (UN)@HACK[2]
       var config = ops[0].type.config
       var type = ops[0].type.type
       ops[0].type = type ? type : ops[0].type
+
       if (config) { // comes from a inbound$
         var prefix = config.prefix
         var check = config.check
@@ -130,11 +146,163 @@ function switchboard (DB, translate, codec) {
       }
     }
     //---------------------------------------------------------------
-    // ==> WRITE: its all DEL or PUT operations !!!!
+    // @IDEA: allow custom op.type's
+    // ==> WRITE: currently its all DEL or PUT operations !!!!
+    // AND: format correct & in allowed writing range
     // 1. given: prefix   - e.g. "!test1#doobidoo1!"
     // 2. given: baseKey  - e.g. "/quux/"
     // 3. given: key      - e.g. "!test1#doobidoo1!/quux/02"
-    // INBOUND request do do something
+    // INBOUND request to do something
+    //---------------------------------------------------------------
+    if (!DATAROUTER.routing) {
+      DATAROUTER.inboundBuffer.push(batch)
+      cb()
+    } else {
+      // @TODO: implement concept in comments below
+      console.log('LESEZEICHEN: [BATCH] <key> ', ops)
+    }
+
+    // 1. inbound$: SAVE DB WRITE OPERATION inbound: petKey2realKey-> toDB/MEM
+        // key, e.g.:      !A#B#C!/foo/bar/baz/5
+        // TRACKER[key]   = '/page/navbar/menu/notification'
+        // tracker, e.g.:  !A#B#C!/foo/bar/baz/
+        // TRACKER[query] = '/page/navbar/menu/'
+        // var diff       =  TRACKER[key].slice(TRACKER[query].length)
+        // var diff       = 'notification'
+        // 2. var realQuery = INBOUND[TRACKER[query]]
+        // 3. var realKey   = realQuery + diff
+        // ;{
+        //   '/x/': '/bla/',
+        //   '/p/': '/bla/',
+        //   '/a/': '/bla/'
+        // }
+        // 4. db.put/del(realKey, TRACKER[value])
+
+    // 2. outbound$: AFTER _batch._batch/_put/_del/_... function cb (error) {
+      // NOTIFY OPERATION all interested outbound$'s: fromDB/MEM->realKey2petKey
+
+          //   for (var i = 0, l = trackingRange.length; i < l; i++) {
+          //     var r = trackingRange[i]
+          // @TODO: binary search for start and end keys
+          //     if (change.key >= r.start && change.key <= r.end) {
+          //       if (r.stream._objectMode) r.stream.queue(change)
+          //       else r.stream.queue(JSON.stringify(change) + '\n')
+          //     }
+          //   }
+
+      // => do: outbound$.push(petKet, dataValue)
+        // @TODO: traverse and validate existance of all petKeys outbound$'s
+        // @IDEA: ALL set realKeys should maybe go to outbound$'s ???
+        // ALL outbound$'s have a config including a "prefix" and "baseKey"
+        // -> in order to go to a specific outbound$, a realKey needs to be mapped
+        //    to at least prefix+baseKey of that outbound$
+
+    ///////////// EXAMPLE CACHE DATASTRUCTURE - created by WIRUP() ////////////
+    ///////////// EXAMPLE CACHE DATASTRUCTURE - used by batchPatch ////////////
+    // // @TODO cache from/for DATAROUTER?
+
+                // var _OUTBOUND = { // db.readable()
+                //   '/bla/': ['/a/', '/b/'],
+                //   '/bla/5': ['/p']
+                // }
+                var _OUTBOUND = {
+                  'stuff/quux/': [
+                    // notify about TRACKINGs
+                    // B:listener1, e.g.: !A!/a/b/c/ (=different readable)
+                    // C:listener2, e.g.: !A#B!/quuz/baz/3 (=different readable)
+                    "!test1#doobidoo1!/quux/", // e.g. outbound$A
+                    "!test1#doobidoo2!/baz/" // e.g. outbound$B
+                    // ... as necessary
+                    // reader$, { query: { gte:'', lt:'' }, prefix:'', baseKey:''}
+                    // READERS listen to petRanges which might or might not
+                    // get mapped to from targetKey by WIREUP
+                    // SO: If a petRange means listening to targetKey
+                    // depends on whether its mapped to it or not
+                    // thus: a translation from
+                  ],
+                  // BY DEFAULT
+                  "!test1#doobidoo1!": [
+                    "!test1#doobidoo1!/quux/",
+                    "!test1#doobidoo2!/baz/"
+                  ],
+                  "!test1#doobidoo1!/quux/": [
+                    // if there is no pet2real mapping for write
+                    // it was written as !test1#doobidoo2!/baz/
+                    // so a lookup real2pet will by default return
+                    // !test1#doobidoo2!/baz/ too
+                    "!test1#doobidoo1!/quux/"
+                  ],
+                  "!test1#doobidoo2!/baz/": [
+                    // if there is no pet2real mapping for write
+                    // it was written as !test1#doobidoo2!/baz/
+                    // so a lookup real2pet will by default return
+                    // !test1#doobidoo2!/baz/ too
+                    "!test1#doobidoo2!/baz/"
+                  ]
+                }
+
+      /////////////////////////////////////////////////
+      // HELPERS
+      // function removeKey (key) {
+      //   var xs = trackingKeys[key]
+      //   if (!xs) return
+      //   var ix = xs.indexOf(output)
+      //   if (ix >= 0) xs.splice(ix, 1)
+      //   if (ix.length === 0) delete trackingKeys[key]
+      // }
+      // function removeRange (r) {
+      //   var ix = trackingRange.indexOf(r)
+      //   if (ix >= 0) trackingRange.splice(ix, 1)
+      // }
+      // function findRange (rf) {
+      //   for (var i = 0; i < trackingRange.length; i++) {
+      //     var r = trackingRange[i]
+      //     if (rf[0] == r.start && rf[1] === r.end && rf[2] === r.since) return r
+      //   }
+      // }
+      // INIT
+      // var through = require('through')
+      // var output = through(write, end)
+      // output._objectMode = opts.objectMode
+      // function END () {}
+      // function end () {
+      //   output.queue(null)
+      // }
+      // UNSUBSCRIBE - single key
+      // else if (row && typeof row === 'object' && row.rm
+      // && typeof row.rm === 'string') {
+      //   removeKey(row.rm)
+      // }
+      // UNSUBSCRIBE - range
+      // else if (row && typeof row === 'object' && row.rm
+      // && Array.isArray(row.rm)) {
+      //   removeRange(findRange(row.rm))
+      // }
+      //////////////////////////////////////////////////////////////////////////////
+      /************************************************************************
+        HELPER - Manage Trackerstreams
+      ************************************************************************/
+      // function batch (arr)      { arr.forEach(each) }
+      // function put (key, val) { each({ type: 'put', key: key, value: val }) }
+      // function del (key, val) { each({ type: 'del', key: key, value: val }) }
+      // function each (item)  { TRACKERSTREAMS.forEach(function process (ts$) {
+      //   var scope = ts$._checkScope(String(item.key))
+      //   if (scope) { publish(ts$, item) }
+      // })}
+      // function publish (ts$, item) {
+      //   var isDifferent = stringify(item) !== stringify(ts$._cache)
+      //   if (isDifferent) {
+      //     ts$._cache = item
+      //     item = ts$._interpretation(item)
+      //     ts$.push(item)
+      //   }
+      // }
+      // COPY FROM LEVEL-TRACKER
+      // https://github.com/dominictarr/level-hooks/blob/master/index.js
+    /////////////////////////////////////////////////////////////////
+    // BELOW IS OLD - needs to updated with concept - ABOVE
+    /////////////////////////////////////////////////////////////////
+
     var petBase = prefix+baseKey
     var ops2 = ops.map(function petKey2realKey (op) {
       var petKey = op.key
@@ -275,21 +443,11 @@ function switchboard (DB, translate, codec) {
     outbound$.on('error', function () { console.log('outbound$ error', outbound$) })
     // @TODO: How to handle errors in streams?
 
-    var outboundBuffer = [], first = true
     var _push = outbound$.push
     outbound$.push = function pushPatch (batch) {
       // @TODO[1]: test, if an initial value pushed to outbound$ will 100% guaranteed arive, if outbound$ itself is not wired up yet - otherwise check for stream events to notify when is the right moment
       batch = validateBatch(batch, config)
-      if (DATAROUTER.routing && first) {
-        first = false
-        outboundBuffer.forEach(function (b) { _push.call(this, b) })
-        outboundBuffer = []
-        _push.call(this, batch)
-      } else if (DATAROUTER.routing) {
-        _push.call(this, batch)
-      } else {
-        bufferRead.push(batch)
-      }
+      _push.call(this, batch)
     }
 
     var prefix = config.prefix
@@ -320,33 +478,24 @@ function switchboard (DB, translate, codec) {
     inbound$.on('error', function () {console.log('inbound$ error', inbound$) })
     // @TODO: How to handle errors in streams?
 
-    var inboundBuffer = [], first = true
     inbound$._write = function (batch, encoding, next) {
       batch = validateBatch(batch, config)
-      if(batch.length) { // Hack to inform "batchPatch"
+      if (batch.length) {
+        // @HACK[2] to inform "batchPatch"
         var tmp = batch[0].type
         batch[0].type = { config: config, type: tmp }
-      }
-      if (DATAROUTER.routing && first) {
-        first = false
-        inboundBuffer.forEach(function (b) { db.batch(b, {}, noop) })
-        inboundBuffer = []
+
         db.batch(batch, {}, next)
-      } else if (DATAROUTER.routing) {
-        db.batch(batch, {}, next)
-      } else {
-        inboundBuffer.push(batch)
-        next()
       }
     }
-
     var prefix = config.prefix
     var baseKey = config.baseKey
     var routes = [{ type: 'inbound', key: prefix+baseKey }]
-    routes.concat(Object.keys(config.defaults).map(function (petKey) {
+    routes = routes.concat(Object.keys(config.defaults).map(format))
+    function format (petKey) {
       var defaultInitVal = config.defaults[petKey]
       return { type: 'inbound', key: petKey, defaultInitVal: defaultInitVal }
-    }))
+    }
     WIREUP(DATAROUTER, routes, inbound$)
     return inbound$
   }
@@ -519,7 +668,7 @@ function WIREUP (DATAROUTER, routes, stream$) {
         else if (legit(w.setInitVal)) { /* do nothing, all is good :-) */ }
         else throw new Error('given default has/contains unsupported type(s)')
     })
-  else DATAROUTER.bufferedRoutes.concat(routes)
+  else DATAROUTER.bufferedRoutes.concat([routes, stream$])
 }
 /******************************************************************************
   HELPER - validateQuery & getCommonBase
@@ -533,7 +682,7 @@ function validateQuery (db, args, translate, codec) {
   // @TODO: re-think  gte,lt , maybe into
   // { gte: '/foobar/!', lte: '/foobar/~' }
   // { gte: '/foobar',   lte: '/foobar'   }
-  var defaults = config.defaults||{}
+  var defaults = config.defaults = config.defaults || {}
   if (type(gte) !== 'string' || type(lt) !== 'string')
     throw ArgumentDoesntFullfillRequirementsError ('query', conofig.query)
   function check (key) { return (gte<=key) && (key<lt) }
@@ -564,13 +713,16 @@ function noop () {}
 function validateBatch (batch, config) {
   batch = [].concat(batch)
   batch.forEach(function (chunk) {
-    if (chunk.type && chunk.type.type) chunk.type = chunk.type.type
+    if (chunk.type && chunk.type.type) chunk.type = chunk.type.type // @HACK[2]
+
     // @TODO: add that batch can contain { type: 'customAction', ... }
     // ... potential feature inspired by REDUX ACTIONS
     // ... @TODO:  if custom actions are neccessary at all
     // @TODO: give each batch an "action name"?
     // @TODO: should have an action log maybe
+
     var type = chunk.type==='del'||(chunk.type==='put' && legit(chunk.value))
+    // @IDEA: enable constraints on "value format" (e.g. json schemas?)
     if (!type) throw ArgumentDoesntFullfillRequirementsError('chunk', chunk)
     if (!config.check(chunk.key)) // all chunks should be in query range
       throw ChunkNotInRangeError(chunk.key, config.query.gte, config.query.lt)
