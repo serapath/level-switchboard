@@ -9,7 +9,7 @@ var deepequal = require('deep-equal')
 module.exports = switchboard
 /******************************************************************************
   MAIN
-  // @TODO: put it into the README.md
+  // @TODO: put it into the README.md + public API
   # CONCEPT
   ## `level-subtracker` & 'level-switchboard'
   1. patches `db` to listen for all changes to the underlying database
@@ -47,25 +47,31 @@ module.exports = switchboard
 ******************************************************************************/
 function switchboard (DB, translate, codec) {
   validateArgs(DB, translate, codec)
-
   var _DB = DB.db
-  var _put = _DB._put.bind(_DB)
-  var _del = _DB._del.bind(_DB)
-  var _get = _DB._get.bind(_DB)
-  var _batch = _DB._batch.bind(_DB)
+  var DATAROUTER = {
+    bufferedRoutes: [], // buffers registered routes
+    inboundBuffer: [], // buffers incoming data
+    routing: undefined, // attach routing flushes bufferedRoutes & inboundBuffer
+    readables: {}, // @TODO: needed?
+    outbound: {}, // @TODO: needed?
+    inbound: {}, // @TODO: needed?
+    _put: _DB._put.bind(_DB),
+    _del: _DB._del.bind(_DB),
+    _get: _DB._get.bind(_DB),
+    _batch: _DB._batch.bind(_DB)
+  }
   _DB._put = putPatch
   _DB._del = delPatch
   _DB._get = getPatch
   _DB._batch = batchPatch
   // @TODO: maybe patch createReadStream too?
-
   // @TODO: DB.off('route') // return currently attached routing
-
   var allow
   var _on = DB.on.bind(DB)
   DB.on = function on (event, callback, opts) {
     ///////////////////////////////////////////////////////////////////////////
-    // @TODO: add to public API and README.md
+    // @TODO: put it into the README.md + public API
+    //
     // function dataRouter (route) {
     //   return {
     //     inbound: { // [PETKEYtoREALKEY] from actual inbound$'s || inbound$ + config
@@ -90,7 +96,9 @@ function switchboard (DB, translate, codec) {
         })
         DATAROUTER.bufferedRoutes = []
         // 2. second is to flush all buffered operations to outbound$'s
-        DATAROUTER.inboundBuffer.forEach(function (b){db.batch(b,{},noop)})
+        DATAROUTER.inboundBuffer.forEach(function (batch) {
+          save2store(DATAROUTER, batch, notify, noop)
+        })
         DATAROUTER.inboundBuffer = []
       } else throw new Error('"routing" must be a function - see README.md')
     }
@@ -104,7 +112,7 @@ function switchboard (DB, translate, codec) {
     // => to READ the correct value
     // @TODO: MAYBE use DATAROUTER.routing(...) ???
     var prefix = (key.match(prefixer)||[])[0]
-    return _get(key, opts, function callback (error, value) {
+    return DATAROUTER._get(key, opts, function callback (error, value) {
       console.log('[GET] <key> ', key, '<value> ', value)
       cb(error, value)
     })
@@ -113,7 +121,7 @@ function switchboard (DB, translate, codec) {
     // @TODO: translate "key" to "WIREUP" translated key
     // => to WRITE the value to the correct path
     var prefix = (key.match(prefixer)||[])[0]
-    return _put(key, value, opts, function callback (error) {
+    return DATAROUTER._put(key, value, opts, function callback (error) {
       console.log('[PUT] <key> ', key, '<value> ', value)
       cb(error)
       // @TODO: else notify({ type: 'put', key: key, value: value })
@@ -124,7 +132,7 @@ function switchboard (DB, translate, codec) {
     // @TODO: translate "key" to "WIREUP" translated key
     // => to DELETE the value at the correct path
     var prefix = (key.match(prefixer)||[])[0]
-    return _del(key, opts, function callback (error) {
+    return DATAROUTER._del(key, opts, function callback (error) {
       console.log('[DEL] <key> ', key)
       cb(error)
       // @TODO: else notify({ type: 'del', key: key })
@@ -138,276 +146,20 @@ function switchboard (DB, translate, codec) {
       ops[0].type = type ? type : ops[0].type
 
       if (config) { // comes from a inbound$
-        var prefix = config.prefix
-        var check = config.check
-        var baseKey = config.baseKey
+        var prefix = config.prefix // e.g. "!test1#doobidoo1!"
+        var baseKey = config.baseKey // e.g. "/quux/"
       } else {
         var prefix = (ops[0].key.match(prefixer)||[])[0]
+        var baseKey = ''
       }
-    }
-    //---------------------------------------------------------------
-    // @IDEA: allow custom op.type's
-    // ==> WRITE: currently its all DEL or PUT operations !!!!
-    // AND: format correct & in allowed writing range
-    // 1. given: prefix   - e.g. "!test1#doobidoo1!"
-    // 2. given: baseKey  - e.g. "/quux/"
-    // 3. given: key      - e.g. "!test1#doobidoo1!/quux/02"
-    // INBOUND request to do something
-    //---------------------------------------------------------------
-    if (!DATAROUTER.routing) {
-      DATAROUTER.inboundBuffer.push(batch)
-      cb()
-    } else {
-      // @TODO: implement concept in comments below
-      console.log('LESEZEICHEN: [BATCH] <key> ', ops)
-    }
-
-    // 1. inbound$: SAVE DB WRITE OPERATION inbound: petKey2realKey-> toDB/MEM
-        // key, e.g.:      !A#B#C!/foo/bar/baz/5
-        // TRACKER[key]   = '/page/navbar/menu/notification'
-        // tracker, e.g.:  !A#B#C!/foo/bar/baz/
-        // TRACKER[query] = '/page/navbar/menu/'
-        // var diff       =  TRACKER[key].slice(TRACKER[query].length)
-        // var diff       = 'notification'
-        // 2. var realQuery = INBOUND[TRACKER[query]]
-        // 3. var realKey   = realQuery + diff
-        // ;{
-        //   '/x/': '/bla/',
-        //   '/p/': '/bla/',
-        //   '/a/': '/bla/'
-        // }
-        // 4. db.put/del(realKey, TRACKER[value])
-
-    // 2. outbound$: AFTER _batch._batch/_put/_del/_... function cb (error) {
-      // NOTIFY OPERATION all interested outbound$'s: fromDB/MEM->realKey2petKey
-
-          //   for (var i = 0, l = trackingRange.length; i < l; i++) {
-          //     var r = trackingRange[i]
-          // @TODO: binary search for start and end keys
-          //     if (change.key >= r.start && change.key <= r.end) {
-          //       if (r.stream._objectMode) r.stream.queue(change)
-          //       else r.stream.queue(JSON.stringify(change) + '\n')
-          //     }
-          //   }
-
-      // => do: outbound$.push(petKet, dataValue)
-        // @TODO: traverse and validate existance of all petKeys outbound$'s
-        // @IDEA: ALL set realKeys should maybe go to outbound$'s ???
-        // ALL outbound$'s have a config including a "prefix" and "baseKey"
-        // -> in order to go to a specific outbound$, a realKey needs to be mapped
-        //    to at least prefix+baseKey of that outbound$
-
-    ///////////// EXAMPLE CACHE DATASTRUCTURE - created by WIRUP() ////////////
-    ///////////// EXAMPLE CACHE DATASTRUCTURE - used by batchPatch ////////////
-    // // @TODO cache from/for DATAROUTER?
-
-                // var _OUTBOUND = { // db.readable()
-                //   '/bla/': ['/a/', '/b/'],
-                //   '/bla/5': ['/p']
-                // }
-                var _OUTBOUND = {
-                  'stuff/quux/': [
-                    // notify about TRACKINGs
-                    // B:listener1, e.g.: !A!/a/b/c/ (=different readable)
-                    // C:listener2, e.g.: !A#B!/quuz/baz/3 (=different readable)
-                    "!test1#doobidoo1!/quux/", // e.g. outbound$A
-                    "!test1#doobidoo2!/baz/" // e.g. outbound$B
-                    // ... as necessary
-                    // reader$, { query: { gte:'', lt:'' }, prefix:'', baseKey:''}
-                    // READERS listen to petRanges which might or might not
-                    // get mapped to from targetKey by WIREUP
-                    // SO: If a petRange means listening to targetKey
-                    // depends on whether its mapped to it or not
-                    // thus: a translation from
-                  ],
-                  // BY DEFAULT
-                  "!test1#doobidoo1!": [
-                    "!test1#doobidoo1!/quux/",
-                    "!test1#doobidoo2!/baz/"
-                  ],
-                  "!test1#doobidoo1!/quux/": [
-                    // if there is no pet2real mapping for write
-                    // it was written as !test1#doobidoo2!/baz/
-                    // so a lookup real2pet will by default return
-                    // !test1#doobidoo2!/baz/ too
-                    "!test1#doobidoo1!/quux/"
-                  ],
-                  "!test1#doobidoo2!/baz/": [
-                    // if there is no pet2real mapping for write
-                    // it was written as !test1#doobidoo2!/baz/
-                    // so a lookup real2pet will by default return
-                    // !test1#doobidoo2!/baz/ too
-                    "!test1#doobidoo2!/baz/"
-                  ]
-                }
-
-      /////////////////////////////////////////////////
-      // HELPERS
-      // function removeKey (key) {
-      //   var xs = trackingKeys[key]
-      //   if (!xs) return
-      //   var ix = xs.indexOf(output)
-      //   if (ix >= 0) xs.splice(ix, 1)
-      //   if (ix.length === 0) delete trackingKeys[key]
-      // }
-      // function removeRange (r) {
-      //   var ix = trackingRange.indexOf(r)
-      //   if (ix >= 0) trackingRange.splice(ix, 1)
-      // }
-      // function findRange (rf) {
-      //   for (var i = 0; i < trackingRange.length; i++) {
-      //     var r = trackingRange[i]
-      //     if (rf[0] == r.start && rf[1] === r.end && rf[2] === r.since) return r
-      //   }
-      // }
-      // INIT
-      // var through = require('through')
-      // var output = through(write, end)
-      // output._objectMode = opts.objectMode
-      // function END () {}
-      // function end () {
-      //   output.queue(null)
-      // }
-      // UNSUBSCRIBE - single key
-      // else if (row && typeof row === 'object' && row.rm
-      // && typeof row.rm === 'string') {
-      //   removeKey(row.rm)
-      // }
-      // UNSUBSCRIBE - range
-      // else if (row && typeof row === 'object' && row.rm
-      // && Array.isArray(row.rm)) {
-      //   removeRange(findRange(row.rm))
-      // }
-      //////////////////////////////////////////////////////////////////////////////
-      /************************************************************************
-        HELPER - Manage Trackerstreams
-      ************************************************************************/
-      // function batch (arr)      { arr.forEach(each) }
-      // function put (key, val) { each({ type: 'put', key: key, value: val }) }
-      // function del (key, val) { each({ type: 'del', key: key, value: val }) }
-      // function each (item)  { TRACKERSTREAMS.forEach(function process (ts$) {
-      //   var scope = ts$._checkScope(String(item.key))
-      //   if (scope) { publish(ts$, item) }
-      // })}
-      // function publish (ts$, item) {
-      //   var isDifferent = stringify(item) !== stringify(ts$._cache)
-      //   if (isDifferent) {
-      //     ts$._cache = item
-      //     item = ts$._interpretation(item)
-      //     ts$.push(item)
-      //   }
-      // }
-      // COPY FROM LEVEL-TRACKER
-      // https://github.com/dominictarr/level-hooks/blob/master/index.js
-    /////////////////////////////////////////////////////////////////
-    // BELOW IS OLD - needs to updated with concept - ABOVE
-    /////////////////////////////////////////////////////////////////
-
-    var petBase = prefix+baseKey
-    var ops2 = ops.map(function petKey2realKey (op) {
-      var petKey = op.key
-      // e.g. petKey = !test1#doobidoo1!/quux/02
-      var realKey = INBOUND[petKey] // maybe from a "default"
-      // e.g. realKey = stuff/quux/02
-      if (!realKey) { // or maybe not
-        var realBase = INBOUND[petBase]
-        // e.g. realBase = 'stuff/quux/'
-        if (realBase) {
-          var start = petBase.length
-          var end = petKey.length - start
-          var key = petKey.substr(start, end)
-          // e.g. key = 02
-          realKey = realBase + key
-          // e.g. stuff/quux/02
-        } else {
-          realKey = petKey
-        }
+      var batch = {
+        ops: ops,
+        opts: opts,
+        petBase: prefix + baseKey
       }
-      return op.type === 'del' ?
-        { key: realKey, type: 'del' }
-        : { key: realKey, type: 'put', value: op.value }
-    })
-    return _batch(ops, opts, function callback (error) {
-      cb(error)
-      // @TODO: make it possible to log changes redo/undo/...
-      // console.log('<write origin="'+ (config ? config.prefix:'') +'" >') // @XXX: temporarily commented out until removed for real
-      // console.log('  [BATCH] <ops> ', ops) // @XXX: temporarily commented out until removed for real
-      // console.log('</write>') // @XXX: temporarily commented out until removed for real
-      // console.log('WROTE DO DB: ', ops.map(function(o){return o.key})) // @XXX: temporarily commented out until removed for real
-      // [REALKEYtoPETKEY] outbound$ + config
-      // offers:
-      //  '!footer#box!/item/'
-      //  '!footer#head!/list/'
-      //  ....
-      // have:
-      //  'stuff/quux/02'
-      var notifications = []
-      ops.forEach(function realKey2petKeys (op) {
-        var realKey = op.key
-        for (var i=0, len=realKey.length; i<=len; i++) {
-          var realBase = realKey.substr(0, len-i)
-          var key = realKey.substr(len-i)
-          var petBases = OUTBOUND[realBase]
-          if (petBases) {
-            petBases.forEach(function (petBase) {
-              notifications.push(op.type === 'del' ?
-                { key: key, petBase: petBase , type: 'del' }
-                : { key: key, petBase: petBase , type: 'put', value: op.value }
-              )
-            })
-          }
-        }
-        return ops
-      })
-
-      // @TODO: map
-      //  'stuff/': '!foogter#head!/list/'
-      //  'stuff/quux': '!foogter#head!/list/'
-
-      // 1. write translation was:
-      // e.g."!test1#doobidoo1!/quux/": 'stuff/quux/'
-      // petBase || petKey // defaults => realBase || realKey // defaults
-
-      // realKey = petKey
-      // realKey = INBOUND[petKey]
-      // realKey = INBOUND[petBase] + petKey.substr(start, end)
-
-      // e.g. realKey = stuff/quux/02
-
-      // 2. read translation should be:
-      // petKey = realKey
-      // petKey = OUTBOUND[realKey]
-
-      // console.log('NOTIFY') // @XXX: temporarily commented out until removed for real
-      notifications.forEach(function (n) {
-        var chunk = n.type === 'del' ?
-         { type: n.type, key: n.petBase + n.key }
-         : { type: n.type, key: n.petBase + n.key, value: n.value }
-        // console.log(n) // @XXX: temporarily commented out until removed for real
-        // console.log(chunk) // @XXX: temporarily commented out until removed for real
-        // @TODO: VERIFY: no read ops can come through, where
-        // petKey is not in listener range
-        try {
-          READABLES[n.petBase].forEach(function (outbound$) {
-            outbound$.push(chunk)
-          })
-        } catch (e) {
-          console.error('This error should not occur!')
-          console.error('Because OUTBOUND is supposed to be validated')
-          // @TODO: remove this try-catch as soon as OUTBOUND is validated
-          console.error(n)
-          console.error(chunk)
-        }
-      })
-    })
-  }
-
-  var DATAROUTER = {
-    bufferedRoutes: [],
-    routing: undefined,
-    readables: {},// @TODO: needed?
-    outbound: {},// @TODO: needed?
-    inbound: {},// @TODO: needed?
+      if (DATAROUTER.routing) save2store(DATAROUTER, batch, notify, cb)
+      else bufferBatch(DATAROUTER, batch, cb)
+    }
   }
 
   DB.duplexable = makeDuplexable
@@ -452,7 +204,8 @@ function switchboard (DB, translate, codec) {
 
     var prefix = config.prefix
     var baseKey = config.baseKey
-    var routes = [{ type: 'outbound', key: prefix+baseKey }]
+    var petBase = prefix+baseKey
+    var routes = [{ type: 'outbound', key: petBase }]
     routes = routes.concat(Object.keys(config.defaults).map(format))
     function format (petKey) {
       var defaultInitVal = config.defaults[petKey]
@@ -460,9 +213,9 @@ function switchboard (DB, translate, codec) {
     }
     WIREUP(DATAROUTER, routes, outbound$)
 
-    if (type(DATAROUTER.readables[prefix+baseKey]) !== 'array')
-      DATAROUTER.readables[prefix+baseKey] = []
-    DATAROUTER.readables[prefix+baseKey].push(outbound$)
+    if (type(DATAROUTER.readables[petBase]) !== 'array')
+      DATAROUTER.readables[petBase] = []
+    DATAROUTER.readables[petBase].push(outbound$)
 
     return outbound$
   }
@@ -568,11 +321,9 @@ function WIREUP (DATAROUTER, routes, stream$) {
           //   read$.pipe(write$)
           // }
 {
-          console.log('@TODO: do stuff')
+          console.log('LESEZEICHEN - @TODO: do stuff WIREUP')
           // @TODO: ADD TO INTERNAL CACHE: DATASTREAM.xxx
           // @TODO: fill
-
-          LESEZEICHEN
 
           DATAROUTER.outbound
           DATAROUTER.inbound
@@ -586,6 +337,52 @@ function WIREUP (DATAROUTER, routes, stream$) {
           // inbound$._write: db.batch(batch, {}, next)
           // and
           // outbound$.push(batch)
+
+
+
+          /////// EXAMPLE CACHE DATASTRUCTURE - created by WIRUP() //////
+          // @TODO cache from/for DATAROUTER?
+
+            // var _OUTBOUND = { // db.readable()
+            //   '/bla/': ['/a/', '/b/'],
+            //   '/bla/5': ['/p']
+            // }
+            var _OUTBOUND = {
+              'stuff/quux/': [
+                // notify about TRACKINGs
+                // B:listener1, e.g.: !A!/a/b/c/ (=different readable)
+                // C:listener2, e.g.: !A#B!/quuz/baz/3 (=different readable)
+                "!test1#doobidoo1!/quux/", // e.g. outbound$A
+                "!test1#doobidoo2!/baz/" // e.g. outbound$B
+                // ... as necessary
+                // reader$, { query: { gte:'', lt:'' }, prefix:'', baseKey:''}
+                // READERS listen to petRanges which might or might not
+                // get mapped to from targetKey by WIREUP
+                // SO: If a petRange means listening to targetKey
+                // depends on whether its mapped to it or not
+                // thus: a translation from
+              ],
+              // BY DEFAULT
+              "!test1#doobidoo1!": [
+                "!test1#doobidoo1!/quux/",
+                "!test1#doobidoo2!/baz/"
+              ],
+              "!test1#doobidoo1!/quux/": [
+                // if there is no pet2real mapping for write
+                // it was written as !test1#doobidoo2!/baz/
+                // so a lookup real2pet will by default return
+                // !test1#doobidoo2!/baz/ too
+                "!test1#doobidoo1!/quux/"
+              ],
+              "!test1#doobidoo2!/baz/": [
+                // if there is no pet2real mapping for write
+                // it was written as !test1#doobidoo2!/baz/
+                // so a lookup real2pet will by default return
+                // !test1#doobidoo2!/baz/ too
+                "!test1#doobidoo2!/baz/"
+              ]
+            }
+          ///// EXAMPLE CACHE DATASTRUCTURE - used by batchPatch /////
 
           var _DEFAULTS = { // js values => internally mapped to JSON
             '/bla/': 'foobar',
@@ -669,6 +466,286 @@ function WIREUP (DATAROUTER, routes, stream$) {
         else throw new Error('given default has/contains unsupported type(s)')
     })
   else DATAROUTER.bufferedRoutes.concat([routes, stream$])
+}
+/******************************************************************************
+  HELPER - bufferBatch
+******************************************************************************/
+function bufferBatch (DATAROUTER, batch, cb) {
+  DATAROUTER.inboundBuffer.push(batch)
+  return cb()
+}
+/******************************************************************************
+  HELPER - save2store
+******************************************************************************/
+function save2store (DATAROUTER, batch, notify, cb) {
+  // ops are all DEL or PUT operations with correct format & in allowed range
+  var ops = batch.ops, opts = batch.opts, petBase = batch.petBase
+  var petKey2realKey = makePetKey2realKey(DATAROUTER, petBase)
+  var petOp2realOp = makePetOp2realOp(petKey2realKey)
+  ops = JSON.parse(JSON.stringify(ops)).map(petOp2realOp)
+  function callback (error) { notify(error, DATAROUTER, ops, cb) }
+  // @IDEA: make it possible to log changes redo/undo/...
+  // @IDEA: record "tests" from replaying certain series of "logged changes"
+  return DATAROUTER._batch(ops, opts, callback)
+}
+/******************************************************************************
+  HELPER - makePetOps2realOps => petOps2realOps
+******************************************************************************/
+function makePetOp2realOp (petKey2realKey) {
+  return function petOp2realOp (petOp) {
+    // @IDEA: allow custom petOp.type's
+    var realKey = petKey2realKey(petOp.key)
+    return petOp.type === 'del' ?
+      { key: realKey, type: 'del' }
+      : { key: realKey, type: 'put', value: petOp.value }
+  }
+}
+// @TODO: check snippet below and if it contains needed thoughts
+// => maybe for db_patch, db_del, ...
+// 1. inbound$: SAVE DB WRITE OPERATION inbound: petKey2realKey-> toDB/MEM
+    // petKey, e.g.:      !A#B#C!/foo/bar/baz/5
+    // TRACKER[petKey]   = '/page/navbar/menu/notification'
+
+    // tracker, e.g.:  !A#B#C!/foo/bar/baz/
+    // TRACKER[query] = '/page/navbar/menu/'
+    // var diff       =  TRACKER[key].slice(TRACKER[query].length)
+    // var diff       = 'notification'
+    // 2. var realQuery = INBOUND[TRACKER[query]]
+    // 3. var realKey   = realQuery + diff
+    // ;{
+    //   '/x/': '/bla/',
+    //   '/p/': '/bla/',
+    //   '/a/': '/bla/'
+    // }
+    // 4. db.put/del(realKey, TRACKER[value])
+/******************************************************************************
+  HELPER - makePetKey2realKey => petKey2realKey
+******************************************************************************/
+function makePetKey2realKey (DATAROUTER, petBase) {
+  return function petKey2realKey (petKey) {
+    // e.g. petKey = !test1#doobidoo1!/quux/02
+    var realKey = DATAROUTER.inbound[petKey] // getter? (for "defaultInitVal"?)
+    // @TODO: guard internal route caching data-structure from being
+    // compliant with all the rules all the time, so maybe setters+getters?
+    if (!realKey) { // or maybe not from "defaultInitVal"?
+    // @TODO: check with WIREUP
+      var realBase = DATAROUTER.inbound[petBase]
+      // @TODO: what about (realBase < "translations" < realKey) ?
+      // e.g. realBase = 'stuff/quux/'
+      if (realBase) {
+        var start = petBase.length
+        var end = petKey.length - start
+        var key = petKey.substr(start, end)
+        // e.g. key = 02
+        realKey = realBase + key
+        // e.g. stuff/quux/02
+      } else realKey = petKey // default case for no given route mapping
+    }
+    return realKey // e.g. realKey = stuff/quux/02
+  }
+}
+/******************************************************************************
+  HELPER - notify
+******************************************************************************/
+function notify (error, DATAROUTER, realOps, cb) {
+  // NOTIFY all interested outbound$'s: fromDB/MEM->realKey2petKey
+  if (error) return cb(error)
+  // @TODO: check with WIREUP
+  /////////////////////////////////////////////////////////////////////////////
+  //   for (var i = 0, l = trackingRange.length; i < l; i++) {
+  //     var r = trackingRange[i]
+  // @TODO: binary search for start and end keys
+  //     if (change.key >= r.start && change.key <= r.end) {
+  //       if (r.stream._objectMode) r.stream.queue(change)
+  //       else r.stream.queue(JSON.stringify(change) + '\n')
+  //     }
+  //   }
+  /////////////////////////////////////////////////////////////////////////////
+  DATAROUTER.outbound = []
+
+  // 1. write2store translation was:
+  // petBase || petKey (from defaults) => realBase || realKey (if default)
+  // =>
+  // realKey = petKey, or
+  // e.g."!test1#doobidoo1!/quux/02": "!test1#doobidoo1!/quux/02"
+  // realKey = INBOUND[petKey], or
+  // e.g."!test1#doobidoo1!/quux/02": 'stuff/quux/02'
+  // realKey = INBOUND[petBase] + petKey.substr(start, end) = petBase + key
+  // e.g."!test1#doobidoo1!/quux/" + "02": 'stuff/quux/' + '02'
+  // =>
+  // e.g. realKey = stuff/quux/02
+
+  // 2. notifyOutbounds read$'s will be:
+  // petKey = realKey
+  // petKey = OUTBOUND[realKey]
+
+  var realKey2petKeys = makeRealKey2petKeys(DATAROUTER, realBase)
+  var realOps2petOps = makeRealOps2petOps(realKey2petKeys)
+  var notifications = []
+  JSON.parse(JSON.stringify(realOps)).map(realOp2petOps).forEach(petOpsNotify)
+  function petOpsNotify (petOps) { notifications.concat(petOps) }
+
+  // @TODO: give example how petOps, realOps, petOp, realOp, ... are looking
+  // offers:
+  //  '!footer#box!/item/'
+  //  '!footer#head!/list/'
+  //  ....
+  // have:
+  //  'stuff/quux/02'
+  // ....
+  // map:
+  //  'stuff/': '!foogter#head!/list/'
+  //  'stuff/quux': '!foogter#head!/list/'
+
+
+  ///////////////////////////////////////////////////////////////////
+  // WIREUP(DATAROUTER, routes, outbound$)
+  //
+  // if (type(DATAROUTER.readables[petBase]) !== 'array')
+  //   DATAROUTER.readables[petBase] = []
+  // DATAROUTER.readables[petBase].push(outbound$)
+  //
+  // return outbound$
+  ///////////////////////////////////////////////////////////////////
+
+
+  notifications.forEach(function notifyOutbound (petOp) {
+    // e.g. petOp = { key: key, petBase: petBase , type: 'del' }
+    // e.g. petOp = { key: key, petBase: petBase , type: 'put', value: val }
+
+    DATAROUTER.readables[]
+    // => do: outbound$.push(petKet, dataValue)
+    // ALL outbound$'s have a config including a "prefix" and "baseKey"
+    // -> in order to go to a specific outbound$, a realKey needs to be mapped
+    //    to at least prefix+baseKey of that outbound$
+
+  })
+
+  console.log('LESEZEICHEN - @TODO: do stuff NOTIFY')
+
+
+
+  // notifications.forEach(function (n) {
+  //   var chunk = n.type === 'del' ?
+  //    { type: n.type, key: n.petBase + n.key }
+  //    : { type: n.type, key: n.petBase + n.key, value: n.value }
+  //   try {
+  //     READABLES[n.petBase].forEach(function (outbound$) {
+  //       outbound$.push(chunk)
+  //     })
+  //   } catch (e) {
+  //     console.error('This error should not occur!')
+  //     console.error('Because OUTBOUND is supposed to be validated')
+  //     // @TODO: remove this try-catch as soon as OUTBOUND is validated
+  //     console.error(n)
+  //     console.error(chunk)
+  //   }
+  // })
+
+/////////////////////////////////////////////////
+// HELPERS
+// function removeKey (key) {
+//   var xs = trackingKeys[key]
+//   if (!xs) return
+//   var ix = xs.indexOf(output)
+//   if (ix >= 0) xs.splice(ix, 1)
+//   if (ix.length === 0) delete trackingKeys[key]
+// }
+// function removeRange (r) {
+//   var ix = trackingRange.indexOf(r)
+//   if (ix >= 0) trackingRange.splice(ix, 1)
+// }
+// function findRange (rf) {
+//   for (var i = 0; i < trackingRange.length; i++) {
+//     var r = trackingRange[i]
+//     if (rf[0] == r.start && rf[1] === r.end && rf[2] === r.since) return r
+//   }
+// }
+// INIT
+// var through = require('through')
+// var output = through(write, end)
+// output._objectMode = opts.objectMode
+// function END () {}
+// function end () {
+//   output.queue(null)
+// }
+// UNSUBSCRIBE - single key
+// else if (row && typeof row === 'object' && row.rm
+// && typeof row.rm === 'string') {
+//   removeKey(row.rm)
+// }
+// UNSUBSCRIBE - range
+// else if (row && typeof row === 'object' && row.rm
+// && Array.isArray(row.rm)) {
+//   removeRange(findRange(row.rm))
+// }
+//////////////////////////////////////////////////////////////////////////////
+/************************************************************************
+  HELPER - Manage Trackerstreams
+************************************************************************/
+// function batch (arr)      { arr.forEach(each) }
+// function put (key, val) { each({ type: 'put', key: key, value: val }) }
+// function del (key, val) { each({ type: 'del', key: key, value: val }) }
+// function each (item)  { TRACKERSTREAMS.forEach(function process (ts$) {
+//   var scope = ts$._checkScope(String(item.key))
+//   if (scope) { publish(ts$, item) }
+// })}
+// function publish (ts$, item) {
+//   var isDifferent = stringify(item) !== stringify(ts$._cache)
+//   if (isDifferent) {
+//     ts$._cache = item
+//     item = ts$._interpretation(item)
+//     ts$.push(item)
+//   }
+// }
+// COPY FROM LEVEL-TRACKER
+// https://github.com/dominictarr/level-hooks/blob/master/index.js
+/////////////////////////////////////////////////////////////////
+
+  function makeRealOp2petOps (realKey2petKeys) {
+    return function realOp2petOps (realOp) {
+      // @IDEA: allow custom realOp.type's ????
+      var petOps = []
+      var petKeys = realKey2petKeys(realOp.key)
+      // [...{ key: key, petBase: petBase }...]
+      petKeys.forEach(function (petKey) {
+        var key = petKey.key
+        var petBase = petKey.petBase
+        var petOp = realOp.type === 'del' ?
+          { key: key, petBase: petBase , type: 'del' }
+          : { key: key, petBase: petBase , type: 'put', value: realOp.value }
+          // @TODO: whom to notify? should that be specified here?
+          // { key: petKey, type: 'del' }
+          // : { key: petKey, type: 'put', value: realOp.value }
+        petOps.push(petOp)
+      })
+      return petOps
+    }
+  }
+
+
+  function makeRealKey2petKeys (DATAROUTER, realBase) {
+    return function realKey2petKeys (realKey) {
+      var petKeys = []
+      for (var i=0, len=realKey.length; i<=len; i++) {
+        // LOOP: realKey -toMany-> realBases
+        var realBase = realKey.substr(0, len-i)
+        var key = realKey.substr(len-i)
+        // realBase -toMany-> petBases
+        var petBases = DATAROUTER.outbound[realBase]
+        if (petBases) {
+          petBases.forEach(function add (petBase) {
+            // THINK: petKey = petBase + key
+            petKeys.push({ key: key, petBase: petBase })
+          })
+        }
+      }
+      return petKeys
+    }
+  }
+
+
+  return cb()
 }
 /******************************************************************************
   HELPER - validateQuery & getCommonBase
