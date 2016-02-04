@@ -148,6 +148,28 @@ function testSuite (t) {
       t.throws(writeWrongFormat, 'write wrong format')
     })
 
+
+    ////////////////////////////////////////
+    // MAKE THIS A TEST
+    //
+    // => should throw for incompatible default values
+    //
+    // var in1$ = db.readable(/*'!footer#box!'*/'/foo/bar/', {
+    //   /*'!footer#box!'*/'/foo/bar/01': 'in1_foobar1',
+    //   /*'!footer#box!'*/'/foo/bar/02': 'in1_foobar2'
+    // })
+    // var in2$ = db.readable(/*'!footer#box!'*/'/foo/bar/', {
+    //   /*'!footer#box!'*/'/foo/bar/01': 'in2_foobar1',
+    //   /*'!footer#box!'*/'/foo/bar/02': 'in2_foobar2'
+    // })
+    ////////////////////////////////////////
+    // MAKE THIS A TEST
+    // var in3$ = db.readable(/*'!footer#box!'*/'/foo/bar/baz', {
+    //   /*'!footer#box!'*/'/foo/bar/baz/01': 'in2_foobar1',
+    //   /*'!footer#box!'*/'/foo/bar/baz/02': 'in2_foobar2'
+    // })
+    ////////////////////////////////////////
+
     t.test('writable$.write({})//wrong format', function (t) {
       t.plan(1)
       var query = { gte: 'foobar/!', lt: 'foobar/~' }
